@@ -2,13 +2,22 @@
 $SqlServerPrimary = "PrimaryReplicaServer"
 $SqlServerSecondary = "SecondaryReplicaServer"
 $DatabaseName = "YourDatabaseName"
-$CertBackupPath = "C:\Backup\TDECert"
-$CertPassword = "StrongPassword123!"
+$KeyVaultName = "YourKeyVaultName"
+$SecretName = "YourSecretName"
 
-# Load SQL Server PowerShell module
-Import-Module SqlServer
+# Load the required modules
+Import-Module Az -ErrorAction Stop
+Import-Module SqlServer -ErrorAction Stop
 
-# Function to create a master key
+# Step 1: Authenticate with Azure
+# Authenticate automatically using a service principal or managed identity
+Connect-AzAccount -Identity
+
+# Step 2: Retrieve the secret from Azure Key Vault
+$Secret = Get-AzKeyVaultSecret -VaultName $KeyVaultName -Name $SecretName
+$CertPassword = $Secret.SecretValueText # Encryption key from Azure Key Vault
+
+# Step 3: Function to create a master key
 function Create-MasterKey {
     param ([string]$SqlServerInstance)
 
@@ -27,9 +36,9 @@ function Create-MasterKey {
     }
 }
 
-# Function to create and backup a certificate
+# Step 4: Function to create and backup a certificate
 function Create-Backup-Certificate {
-    param ([string]$SqlServerInstance)
+    param ([string]$SqlServerInstance, [string]$CertBackupPath)
 
     $CertificateExists = Invoke-Sqlcmd -ServerInstance $SqlServerInstance -Query "
     SELECT COUNT(*) AS Count FROM sys.certificates WHERE name = 'TDECert';
@@ -53,9 +62,9 @@ function Create-Backup-Certificate {
     }
 }
 
-# Function to restore a certificate on secondary replica
+# Step 5: Function to restore a certificate on secondary replicas
 function Restore-Certificate {
-    param ([string]$SqlServerInstance)
+    param ([string]$SqlServerInstance, [string]$CertBackupPath)
 
     $CertificateExists = Invoke-Sqlcmd -ServerInstance $SqlServerInstance -Query "
     SELECT COUNT(*) AS Count FROM sys.certificates WHERE name = 'TDECert';
@@ -77,7 +86,7 @@ function Restore-Certificate {
     }
 }
 
-# Function to enable TDE on the database
+# Step 6: Function to enable TDE on the database
 function Enable-TDE {
     param ([string]$SqlServerInstance, [string]$DatabaseName)
 
@@ -100,4 +109,16 @@ function Enable-TDE {
     }
 }
 
-# Step 1: Create master key and certificate on primary replica
+# Step 7: Execute the steps
+$CertBackupPath = "C:\Backup\TDECert"
+New-Item -ItemType Directory -Force -Path $CertBackupPath | Out-Null
+
+# Create master key and certificate on the primary replica
+Create-MasterKey -SqlServerInstance $SqlServerPrimary
+Create-Backup-Certificate -SqlServerInstance $SqlServerPrimary -CertBackupPath $CertBackupPath
+
+# Restore the certificate on the secondary replica
+Restore-Certificate -SqlServerInstance $SqlServerSecondary -CertBackupPath $CertBackupPath
+
+# Enable TDE on the primary replica
+Enable-TDE -SqlServerInstance $SqlServerPrimary -DatabaseName $DatabaseName
